@@ -1,0 +1,85 @@
+name: Build unsigned IPA
+
+# 触发方式：推送到 main/master，或在 Actions 页面手动 Run workflow
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: xcodegen + xcodebuild archive (unsigned)
+    runs-on: macos-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: |
+          brew install xcodegen
+          xcodegen --version
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Generate Xcode project
+        run: |
+          xcodegen generate
+          ls -la
+          ls -la Burner.xcodeproj
+
+      - name: Archive (unsigned)
+        run: |
+          set -o pipefail
+          mkdir -p build
+          xcodebuild \
+            -project Burner.xcodeproj \
+            -scheme Burner \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath build/Burner.xcarchive \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            DEVELOPMENT_TEAM="" \
+            archive 2>&1 | tee build/xcodebuild.log
+
+      - name: Package unsigned IPA
+        run: |
+          set -euo pipefail
+          APP="build/Burner.xcarchive/Products/Applications/Burner.app"
+          echo "--- archive 内容 ---"
+          ls -la build/Burner.xcarchive/Products/Applications/ || true
+          test -d "$APP" || { echo "找不到 $APP"; exit 1; }
+
+          rm -rf Payload Burner-unsigned.ipa
+          mkdir -p Payload
+          cp -R "$APP" Payload/
+          # 未签名包不需要（也不该有）签名残留
+          rm -rf Payload/Burner.app/_CodeSignature
+          rm -rf Payload/Burner.app/embedded.mobileprovision
+
+          zip -qry Burner-unsigned.ipa Payload
+          echo "--- 产物 ---"
+          ls -lh Burner-unsigned.ipa
+          unzip -l Burner-unsigned.ipa
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: Burner-unsigned-ipa
+          path: Burner-unsigned.ipa
+          if-no-files-found: error
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcodebuild-log
+          path: build/xcodebuild.log
+          if-no-files-found: warn

@@ -1,0 +1,18 @@
+# XcodeGen 生成物
+Burner.xcodeproj/
+Burner-Info.plist
+
+# 构建产物
+build/
+DerivedData/
+Payload/
+*.ipa
+*.xcarchive
+
+# macOS
+.DS_Store
+
+# 编辑器
+.vscode/
+.idea/
+*.swp
