@@ -47,6 +47,7 @@ final class ANEBurner {
         var state: String = "停止"     // 停止 / 加载中 / 运行中 / 模型加载失败
         var rate: Double = 0           // 每秒 predict 次数
         var shape: String = "-"        // 模型实际输入形状（从模型描述里读的）
+        var device: String = ""        // iOS 17.4+ 用 MLComputePlan 读到的算子落点
     }
 
     private static let modelName = "ane_burner"
@@ -67,6 +68,7 @@ final class ANEBurner {
 
     private var cachedModel: MLModel?
     private var cachedShape: String = "-"
+    private var cachedDevice: String = ""
     private var loadFailed = false
 
     // 统计（全部在 lock 内读写）
@@ -119,6 +121,7 @@ final class ANEBurner {
         s.state = running ? stateText : "停止"
         s.rate = rateValue
         s.shape = cachedShape
+        s.device = cachedDevice
         return s
     }
 
@@ -181,10 +184,11 @@ final class ANEBurner {
         return running && generation == gen
     }
 
-    private func setState(_ text: String, shape: String?) {
+    private func setState(_ text: String, shape: String?, device: String? = nil) {
         lock.lock()
         stateText = text
         if let shape = shape { cachedShape = shape }
+        if let device = device { cachedDevice = device }
         lastBeat = CACurrentMediaTime()
         lock.unlock()
     }
@@ -266,7 +270,7 @@ final class ANEBurner {
             let prepared: Prepared
             do {
                 prepared = try prepare()
-                setState("运行中", shape: prepared.shapeText)
+                setState("运行中", shape: prepared.shapeText, device: snapshot().device)
                 NSLog("[Burner][ANE] 模型就绪 shape=%@", prepared.shapeText)
             } catch {
                 noteError()
@@ -300,7 +304,7 @@ final class ANEBurner {
                         // 某些模型/系统版本不接受 outputBackings（输出形状对不上等），
                         // 退回到「框架自己分配输出」再试一次，不要因此停掉整条负载。
                         useOutputBackings = false
-                        options.outputBackings = nil
+                        options.outputBackings = [:]
                         NSLog("%@", "[Burner][ANE] 带 outputBackings 的推理失败，退回默认输出: "
                                 + String(describing: error))
                         continue
@@ -349,6 +353,13 @@ final class ANEBurner {
             }
             model = try MLModel(contentsOf: url, configuration: cfg)
             cachedModel = model
+            // iOS 17.4+ 才能问「这个模型的算子准备在哪个计算单元上跑」；
+            // 这是 App 内唯一能确认 ANE 路由的手段（GHA 的 macOS VM 没有 ANE，看不出来）。
+            let device = ANEBurner.probeComputeDevice(url: url, config: cfg)
+            lock.lock()
+            cachedDevice = device
+            lock.unlock()
+            NSLog("[Burner][ANE] 计算单元探测: %@", device)
         }
 
         let desc = model.modelDescription
@@ -383,6 +394,40 @@ final class ANEBurner {
                         output: output,
                         inputProvider: inProvider,
                         shapeText: shapeText)
+    }
+
+    /// iOS 17.4+：用 `MLComputePlan` 读模型每一层「准备在哪个计算单元上跑」。
+    /// 这是 App 内唯一能确认 ANE 路由的手段（GHA 的 macOS VM 不暴露 ANE，看不出来）。
+    /// 返回例如 "ANE 1/1" / "CPU 1/1"；拿不到就返回空串。
+    private static func probeComputeDevice(url: URL, config: MLModelConfiguration) -> String {
+        if #available(iOS 17.4, *) {
+            return probeWithComputePlan(url: url, config: config)
+        }
+        return ""
+    }
+
+    @available(iOS 17.4, *)
+    private static func probeWithComputePlan(url: URL, config: MLModelConfiguration) -> String {
+        let sem = DispatchSemaphore(value: 0)
+        var text = ""
+        MLComputePlan.load(contentsOf: url, configuration: config) { plan, _ in
+            defer { sem.signal() }
+            guard let plan = plan,
+                  let nn = plan.modelStructure?.neuralNetwork else { return }
+            var ne = 0
+            var total = 0
+            for layer in nn.layers {
+                total += 1
+                if let usage = plan.computeDeviceUsage(for: layer),
+                   let device = usage.preferredComputeDevice,
+                   device is MLNeuralEngineComputeDevice {
+                    ne += 1
+                }
+            }
+            text = ne > 0 ? "ANE \(ne)/\(total)" : "CPU \(total) 层"
+        }
+        _ = sem.wait(timeout: .now() + 8)
+        return text
     }
 
     /// 找编译好的模型：Xcode 会把 .mlmodel 自动编译成 .mlmodelc 放进 bundle；
