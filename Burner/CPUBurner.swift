@@ -64,7 +64,7 @@ final class CPUBurner {
                 self?.worker(index: i, gen: gen)
             }
             t.name = "burner.cpu.\(i)"
-            t.qualityOfService = .userInteractive
+            t.qualityOfService = .utility
             t.stackSize = 1 << 20
             list.append(t)
         }

@@ -112,7 +112,8 @@ fragment float4 burner_fragment(VOut in [[stage_in]],
         v = clamp(v + (1.0 - fb.r) * prevW * 0.02, 0.0, 0.06);
     }
 
-    // 接近纯白：只有 0~6% 的亮度扰动
-    float3 col = float3(1.0) - float3(v * 0.85, v * 0.92, v);
+    // 可见的灰度纹理：v(0~0.05) 系数放大后最大衰减 ~0.5-0.58，输出落在 0.42~1.0
+    float3 col = float3(1.0) - clamp(float3(v * 11.0, v * 10.4, v * 11.6),
+                                     float3(0.0), float3(0.50, 0.54, 0.58));
     return float4(col, 1.0);
 }
