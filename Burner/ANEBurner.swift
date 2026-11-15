@@ -251,7 +251,6 @@ final class ANEBurner {
         let input: MLMultiArray
         let output: MLMultiArray
         let inputProvider: ANEFeatureProvider
-        let outputProvider: ANEFeatureProvider
         let shapeText: String
 
         /// 每 256 次推理轻轻动一下输入：不花什么钱，但保证波形一直在变
@@ -279,7 +278,9 @@ final class ANEBurner {
             let model = prepared.model
             let options = MLPredictionOptions()
             var useOutputBackings = true
-            options.outputBackings = prepared.outputProvider
+            // outputBackings 是 [输出名: 缓冲区]，把预分配的 MLMultiArray 塞进去，
+            // 这样每次推理不用让 Core ML 再分配一块 128KB 的输出。
+            options.outputBackings = [ANEBurner.outputName: prepared.output]
 
             var pending: UInt64 = 0
             var stamp = CACurrentMediaTime()
@@ -375,16 +376,12 @@ final class ANEBurner {
         let inProvider = ANEFeatureProvider(
             [ANEBurner.inputName: MLFeatureValue(multiArray: input)]
         )
-        let outProvider = ANEFeatureProvider(
-            [ANEBurner.outputName: MLFeatureValue(multiArray: output)]
-        )
 
         let shapeText = inShape.map { String($0.intValue) }.joined(separator: "x")
         return Prepared(model: model,
                         input: input,
                         output: output,
                         inputProvider: inProvider,
-                        outputProvider: outProvider,
                         shapeText: shapeText)
     }
 

@@ -33,10 +33,18 @@ jobs:
       # ANE 模型必须在 xcodegen 之前生成：xcodegen 扫描 Burner/ 目录时才看得到
       # Burner/Resources/ane_burner.mlmodel，并把它作为资源加进工程。
       # 模型本身不进 git（.gitignore 里排除了 *.mlmodel）。
+      # 固定用 Python 3.12：coremltools 只有到 cp313 的 arm64 wheel，
+      # runner 自带的 python3 是 3.15，只能拿 sdist 编译（没有 libcoremlpython，
+      # 也就没法用 MLComputePlan 验证 ANE 路由）。
+      - name: Set up Python (Core ML wheels)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
       - name: Generate ANE Core ML model
         run: |
           set -euo pipefail
-          python3 -m venv .venv-coreml
+          python -m venv .venv-coreml
           .venv-coreml/bin/python -m pip install --upgrade pip
           .venv-coreml/bin/python -m pip install "coremltools>=8,<10" numpy
           .venv-coreml/bin/python -c "import coremltools; print('coremltools', coremltools.__version__)"
