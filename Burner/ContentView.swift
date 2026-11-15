@@ -108,12 +108,6 @@ struct ContentView: View {
                         .font(.system(size: 9, design: .monospaced))
                         .foregroundColor(Color(white: 0.45))
 
-                    if !engine.stats.aneDevice.isEmpty {
-                        Text("ANE 算子落点(MLComputePlan): \(engine.stats.aneDevice)")
-                            .font(.system(size: 9, design: .monospaced))
-                            .foregroundColor(Color(white: 0.45))
-                    }
-
                     Text("保持通风、勿覆盖机身；过热时 iPad 会自动降频。")
                         .font(.system(size: 9.5, design: .monospaced))
                         .foregroundColor(Color(white: 0.3))

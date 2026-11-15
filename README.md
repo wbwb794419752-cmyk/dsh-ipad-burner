@@ -173,13 +173,11 @@ ANE 的功率基本是净增量（第三方实测：M1 上持续卷积约 1.78W�
   `ane_burner.mlmodelc` 打进 bundle。仓库里只提交脚本。
 - **CI 里能验证到哪一步**：生成脚本带 `--verify`，会在 runner 上真的编译一遍模型
   （`coremlc compile`），并用 `MLComputePlan` 逐层打印 `preferred compute device`。
-  但 GHA 的 `macos-26-arm64` 是**虚拟机，不暴露 ANE**（只列出 CPU/GPU），
-  所以 CI 日志里只能确认「模型合法、能被编译、算子被识别成 convolution」，
-  看不到 `NeuralEngine` 这一项——这是 runner 的限制，不是模型的问题。
-  
-  真正确认 ANE 落点要看真机：App 面板上多了一行
-  **`ANE 算子落点(MLComputePlan)`**（iOS 17.4+ 才有），显示 `ANE 1/1` 就说明
-  这个卷积确实被派到了神经引擎；显示 `CPU 1/1` 说明这台设备/这个系统版本把算子退回了 CPU。
+  但 GHA 的 `macos-26-arm64` 是**虚拟机，不暴露 ANE**（只列出 `MLCPUComputeDevice` /
+  `MLGPUComputeDevice`），所以 CI 日志里只能确认「模型合法、能被编译、算子被识别成
+  convolution」，看不到 `NeuralEngine` 这一项——这是 runner 的限制，不是模型的问题。
+  真正的 ANE 落点只能在真机上确认（Xcode → Open Developer Tool → Instruments →
+  Core ML 模板，或看加上 ANE 之后同样时长放电快了多少）。
   脚本还会按 `[1,64,512,1] → [1,64,32,16] → [1,64,64,8] → [1,64,128,4]` 依次试，
   哪个形状能整层落到 ANE 就用哪个（App 端从模型描述里读实际形状，不写死）。
 - **看门狗**：`ANEBurner` 的工作线程每次推理都包在 `try/catch` 里，另一个看门狗线程每 2s

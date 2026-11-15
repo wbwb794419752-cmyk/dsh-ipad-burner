@@ -164,7 +164,6 @@ final class BurnerEngine: ObservableObject {
         let a = ane.snapshot()
         s.aneState = a.state
         s.aneRate = a.rate
-        s.aneDevice = a.device
         s.thermal = slow.thermal
         s.thermalText = slow.thermalText
         s.battery = slow.battery
