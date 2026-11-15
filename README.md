@@ -14,7 +14,7 @@
 | 负载 | 实现 | 强度 |
 |---|---|---|
 | **GPU** | 全屏 `MTKView`，重型片元着色器：8 octaves fbm × 5 光源 × 3 子光源 ≈ **每像素 120 次噪声求值**；每帧 **固定 4 个全屏 pass**（两张 offscreen 纹理 ping-pong，读上一 pass 做反馈） | 原生分辨率（2388×1668 @2x ≈ 400 万像素）× 固定 4 pass |
-| **CPU** | **16 条独立 `Thread`**（`activeProcessorCount × 2` 超订，8 核 → 16 条），每条线程独立工作集：64×64 矩阵乘（262k 次乘加）+ 4096 个元素 `sin/cos/exp` + 8MB scratch 跨步扫描 + 结果衰减 | 前 8 条 `.userInitiated` 锁 P 核、后 8 条 `.background` + `setpriority(PRIO_DARWIN_THREAD, 0, PRIO_DARWIN_BG)` 压 E 核；热循环里无锁、无 ARC、无数组边界检查（全 `UnsafeMutablePointer`） |
+| **CPU** | **8 条独立 `Thread`**（`activeProcessorCount`，M1 正好 8 核全占），每条线程独立工作集：64×64 矩阵乘（262k 次乘加）+ 4096 个元素 `sin/cos/exp` + 8MB scratch 跨步扫描 + 结果衰减 | 热循环里无锁、无 ARC、无数组边界检查（全 `UnsafeMutablePointer`） |
 | **内存带宽** | `malloc` **1024MB**，逐页触碰落成常驻，然后无限次全量「读→改→写」；失败自动降级 512 / 256MB | 单线程连续扫，实测会把内存控制器压到接近饱和 |
 | **屏幕** | 输出接近纯白（`1.0 - 0~6%` 灰度扰动），LCD 背光全开；运行期间把系统亮度强制拉到 100%，停止时恢复原值 | 背光 + GPU 双重发热 |
 | **防锁屏** | `UIApplication.shared.isIdleTimerDisabled = true`（进程级原生 API，AppDelegate 启动时设、回前台再设一次） | 不依赖系统设置，不依赖 Wake Lock |
@@ -159,7 +159,7 @@ CPU% / RSS / 热状态 / 电池 统一走同一个 **2.5s 慢采样门**，不�
 |---|---|
 | GPU pass 数（默认固定 4，不降档） | `MetalRenderer.swift` 的 `passCount` 初值 |
 | 每像素噪声量 | `shaders.metal` 里 `fbm8` 的八度数（8）、外层 `i < 5`、内层 `j < 3` |
-| CPU 线程数 | `CPUBurner.start()` 里 `min(16, activeProcessorCount * 2)`，前 `min(8, 核数)` 条 `.userInitiated`、其余 `.background` + `PRIO_DARWIN_BG` |
+| CPU 线程数 | `CPUBurner.start()` 里 `min(8, activeProcessorCount)`，可改成 9/10 超订 |
 | 矩阵规模 / scratch 大小 | `CPUBurner` 的 `matrixN`、`scratchCount` |
 | 内存占用 | `MemoryBurner.ladder`（默认 `[1024, 512, 256]`） |
 | 慢采样周期 | `BurnerEngine.refresh()` 里的 `now - lastSlowAt >= 2.5` |
