@@ -431,20 +431,27 @@ final class ANEBurner {
             defer { sem.signal() }
             let cfg = MLModelConfiguration()
             cfg.computeUnits = .cpuAndNeuralEngine
-            guard let plan = try? await MLComputePlan.load(contentsOf: url, configuration: cfg),
-                  let nn = plan.modelStructure?.neuralNetwork else { return }
-
-            var ne = 0
-            var total = 0
-            for layer in nn.layers {
-                total += 1
-                if let usage = plan.computeDeviceUsage(for: layer),
-                   let device = usage.preferredComputeDevice,
-                   device is MLNeuralEngineComputeDevice {
-                    ne += 1
-                }
+            guard let plan = try? await MLComputePlan.load(contentsOf: url, configuration: cfg) else {
+                return
             }
-            box.set(ne > 0 ? "ANE \(ne)/\(total)" : "CPU \(total) 层")
+
+            // MLModelStructure 是 enum：只有 neuralnetwork / program / pipeline 三种
+            switch plan.modelStructure {
+            case .neuralNetwork(let nn):
+                var ne = 0
+                var total = 0
+                for layer in nn.layers {
+                    total += 1
+                    if let usage = plan.computeDeviceUsage(for: layer),
+                       let device = usage.preferredComputeDevice,
+                       device is MLNeuralEngineComputeDevice {
+                        ne += 1
+                    }
+                }
+                box.set(ne > 0 ? "ANE \(ne)/\(total)" : "CPU \(total) 层")
+            default:
+                box.set("非 NN 模型")
+            }
         }
 
         _ = sem.wait(timeout: .now() + 8)
