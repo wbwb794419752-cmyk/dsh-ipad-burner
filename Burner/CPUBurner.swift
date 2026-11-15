@@ -2,7 +2,7 @@
 //  CPUBurner.swift
 //  Burner
 //
-//  8 线程 CPU 满载器。每个 worker 一条独立 Thread、独立工作集：
+//  16 线程 CPU 满载器（8 核 × 2 超订）。每个 worker 一条独立 Thread、独立工作集：
 //    ① 64×64 矩阵乘（262k 次乘加）
 //    ② 4096 个元素的 sin / cos / exp 超越函数
 //    ③ 8MB scratch 跨步扫描（每 4 个取 1 个，制造非连续访存）
@@ -13,6 +13,12 @@
 
 import Foundation
 import QuartzCore
+import Darwin
+
+/// sys/resource.h 里的常量，写字面量防止宏没被导入：
+///   PRIO_DARWIN_THREAD = 3、PRIO_DARWIN_BG = 0x1000
+private let prioDarwinThread: Int32 = 3
+private let prioDarwinBG: Int32 = 0x1000
 
 final class CPUBurner {
 
@@ -46,8 +52,12 @@ final class CPUBurner {
         generation &+= 1
         let gen = generation
 
-        // M1 的 8 核全用；小于 8 核的设备按实际核数（不超过 8）
-        let n = max(1, min(8, ProcessInfo.processInfo.activeProcessorCount))
+        // 2× 超订：调度器只有在线程数超过核心数时才会招募 E 簇。
+        // M1（8 核）→ 16 条线程；核数更少的设备按 2× 实际核数。
+        let cores = max(1, ProcessInfo.processInfo.activeProcessorCount)
+        let n = max(1, min(16, cores * 2))
+        // 前半锁 P 核，后半压 E 核（8 核设备正好 8 + 8）
+        let pThreads = max(1, min(8, cores))
         threadCount = n
         beats = Array(repeating: 0.0, count: n)
         iterations = Array(repeating: 0, count: n)
@@ -60,15 +70,15 @@ final class CPUBurner {
         var list: [Thread] = []
         list.reserveCapacity(n)
         for i in 0..<n {
+            let isBackground = i >= pThreads
             let t = Thread { [weak self] in
-                self?.worker(index: i, gen: gen)
+                self?.worker(index: i, gen: gen, background: isBackground)
             }
             t.name = "burner.cpu.\(i)"
-            // QoS 决定线程落在哪一簇：CLPC 只按 QoS 分簇派发。
-            // 全部 .utility 会只占 E 核、全部 .userInteractive 会只占 P 核，
-            // 两种情况都各留一半核闲置（≈50% CPU）。
-            // 所以前 4 条锁 P 核、其余锁 E 核，显式填满两簇。
-            t.qualityOfService = (i < 4) ? .userInteractive : .utility
+            // iOS 不支持绑核（thread_policy_set → KERN_NOT_SUPPORTED），
+            // QoS 是唯一能硬压 E 核的杠杆：.background 走 E 簇、.userInitiated 走 P 簇。
+            // 注意 .utility 并不是 E 核专属（P 核也会接），这是之前 4+4 分簇只跑到 50% 的原因。
+            t.qualityOfService = isBackground ? .background : .userInitiated
             t.stackSize = 1 << 20
             list.append(t)
         }
@@ -135,7 +145,13 @@ final class CPUBurner {
 
     /// 单线程工作体。注意：这里的热循环全部用 UnsafeMutablePointer，
     /// 没有数组边界检查、没有 ARC，编译器能稳定生成紧凑的浮点循环。
-    private func worker(index: Int, gen: Int) {
+    private func worker(index: Int, gen: Int, background: Bool) {
+        // 双重保险：QoS 之外再用 setpriority 把线程钉进 background band，
+        // CLPC 就会稳定把它派到 E 核。必须在工作线程内部调用——它作用于「当前线程」，
+        // who 传 0 即调用线程本身。
+        if background {
+            _ = setpriority(prioDarwinThread, 0, prioDarwinBG)
+        }
         autoreleasepool {
             let n = CPUBurner.matrixN
             let cells = CPUBurner.cells
