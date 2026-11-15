@@ -41,12 +41,31 @@ final class ANEFeatureProvider: MLFeatureProvider {
     }
 }
 
+/// MLComputePlan 探测结果：跨 Task 传值用（探测是 async，外面用信号量等）
+private final class ANEDeviceProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = ""
+
+    func set(_ v: String) {
+        lock.lock()
+        value = v
+        lock.unlock()
+    }
+
+    func get() -> String {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
+    }
+}
+
 final class ANEBurner {
 
     struct Snapshot {
         var state: String = "停止"     // 停止 / 加载中 / 运行中 / 模型加载失败
         var rate: Double = 0           // 每秒 predict 次数
         var shape: String = "-"        // 模型实际输入形状（从模型描述里读的）
+        var device: String = ""        // iOS 17.4+ MLComputePlan 读到的算子落点
     }
 
     private static let modelName = "ane_burner"
@@ -67,6 +86,7 @@ final class ANEBurner {
 
     private var cachedModel: MLModel?
     private var cachedShape: String = "-"
+    private var cachedDevice: String = ""
     private var loadFailed = false
 
     // 统计（全部在 lock 内读写）
@@ -119,6 +139,7 @@ final class ANEBurner {
         s.state = running ? stateText : "停止"
         s.rate = rateValue
         s.shape = cachedShape
+        s.device = cachedDevice
         return s
     }
 
@@ -349,6 +370,12 @@ final class ANEBurner {
             }
             model = try MLModel(contentsOf: url, configuration: cfg)
             cachedModel = model
+
+            let device = ANEBurner.probeComputeDevice(url: url)
+            lock.lock()
+            cachedDevice = device
+            lock.unlock()
+            NSLog("[Burner][ANE] 算子落点探测: %@", device.isEmpty ? "未知" : device)
         }
 
         let desc = model.modelDescription
@@ -383,6 +410,45 @@ final class ANEBurner {
                         output: output,
                         inputProvider: inProvider,
                         shapeText: shapeText)
+    }
+
+    /// iOS 17.4+：用 `MLComputePlan` 问系统「这些算子准备在哪个计算单元上跑」。
+    /// Swift 只暴露 async 版，所以丢进 detached Task，外面用信号量最多等 8 秒。
+    /// 这是 App 内唯一能确认 ANE 路由的手段（GHA 的 macOS 虚拟机不暴露 ANE）。
+    private static func probeComputeDevice(url: URL) -> String {
+        if #available(iOS 17.4, *) {
+            return probeWithComputePlan(url: url)
+        }
+        return ""
+    }
+
+    @available(iOS 17.4, *)
+    private static func probeWithComputePlan(url: URL) -> String {
+        let sem = DispatchSemaphore(value: 0)
+        let box = ANEDeviceProbe()
+
+        _ = Task.detached(priority: .utility) {
+            defer { sem.signal() }
+            let cfg = MLModelConfiguration()
+            cfg.computeUnits = .cpuAndNeuralEngine
+            guard let plan = try? await MLComputePlan.load(contentsOf: url, configuration: cfg),
+                  let nn = plan.modelStructure?.neuralNetwork else { return }
+
+            var ne = 0
+            var total = 0
+            for layer in nn.layers {
+                total += 1
+                if let usage = plan.computeDeviceUsage(for: layer),
+                   let device = usage.preferredComputeDevice,
+                   device is MLNeuralEngineComputeDevice {
+                    ne += 1
+                }
+            }
+            box.set(ne > 0 ? "ANE \(ne)/\(total)" : "CPU \(total) 层")
+        }
+
+        _ = sem.wait(timeout: .now() + 8)
+        return box.get()
     }
 
     /// 找编译好的模型：Xcode 会把 .mlmodel 自动编译成 .mlmodelc 放进 bundle；
