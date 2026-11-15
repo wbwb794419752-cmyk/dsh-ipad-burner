@@ -64,7 +64,11 @@ final class CPUBurner {
                 self?.worker(index: i, gen: gen)
             }
             t.name = "burner.cpu.\(i)"
-            t.qualityOfService = .utility
+            // QoS 决定线程落在哪一簇：CLPC 只按 QoS 分簇派发。
+            // 全部 .utility 会只占 E 核、全部 .userInteractive 会只占 P 核，
+            // 两种情况都各留一半核闲置（≈50% CPU）。
+            // 所以前 4 条锁 P 核、其余锁 E 核，显式填满两簇。
+            t.qualityOfService = (i < 4) ? .userInteractive : .utility
             t.stackSize = 1 << 20
             list.append(t)
         }
