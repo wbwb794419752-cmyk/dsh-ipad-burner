@@ -29,7 +29,6 @@ struct BurnStats {
     var thermalText: String = "-"
     var battery: Int = -1            // 0-100，-1 表示未知（模拟器恒为 -1）
     var batteryText: String = "-"
-    var powerText: String = "采样中…"  // 由放电速率反推的整机功耗估算
     var errors: Int = 0
     var restarts: Int = 0
 }

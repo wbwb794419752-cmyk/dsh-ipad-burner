@@ -3,7 +3,7 @@
 //  Burner
 //
 //  全屏三角形 + 重负载片元着色器。
-//  单个像素的计算量：5 个光源 × 3 个子光源 × fbm(6 octaves) = 90 次噪声求值，
+//  单个像素的计算量：5 个光源 × 3 个子光源 × fbm(8 octaves) = 120 次噪声求值，
 //  每次噪声 = 4 次 hash + 2 次 mix，另外还有 normalize/dot/exp 等。
 //  颜色输出是 0.42~1.0 的灰度噪声纹理（清晰可见），LCD 背光功耗与内容无关。
 //
@@ -53,11 +53,11 @@ static inline float vnoise(float2 p) {
     return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
 }
 
-// 6 个八度的 fbm
-static inline float fbm6(float2 p) {
+// 8 个八度的 fbm
+static inline float fbm8(float2 p) {
     float v = 0.0;
     float a = 0.5;
-    for (int i = 0; i < 6; ++i) {
+    for (int i = 0; i < 8; ++i) {
         v += a * vnoise(p);
         p = p * 2.02 + float2(7.31, 3.17);
         a *= 0.5;
@@ -91,8 +91,8 @@ fragment float4 burner_fragment(VOut in [[stage_in]],
         for (int j = 0; j < 3; ++j) {
             float fj = float(j);
 
-            // 90 次噪声求值的主要来源
-            float n = fbm6(q + float2(fj * 0.53, fi * 0.37) + seed);
+            // 120 次噪声求值的主要来源
+            float n = fbm8(q + float2(fj * 0.53, fi * 0.37) + seed);
             acc += n / (1.0 + fi + fj);
 
             float3 L = normalize(float3(sin(fi * 1.3 + t * 0.05),

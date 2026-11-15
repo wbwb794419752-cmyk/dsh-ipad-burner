@@ -2,10 +2,10 @@
 //  MemoryBurner.swift
 //  Burner
 //
-//  单线程内存带宽压榨：分配 512MB（失败自动降级 256/128/64MB），
+//  单线程内存带宽压榨：分配 1024MB（失败自动降级 512/256MB），
 //  然后无限次「全量读 → 改 → 写」。
 //  原生 App 没有 WebContent 的 3GB 上限，可以贪一点；
-//  512MB 在 6GB/8GB 的 iPad Pro 上前台运行是安全的。
+//  1GB 在 8GB 的 M1 iPad Pro 上前台运行是安全的（触发 jetsam 就看面板的内存警告）。
 //
 
 import Foundation
@@ -14,7 +14,7 @@ import QuartzCore
 final class MemoryBurner {
 
     /// 降级阶梯（MB）
-    private static let ladder = [512, 256, 128, 64]
+    private static let ladder = [1024, 512, 256]
 
     private let lock = NSLock()
     private var running = false
@@ -125,7 +125,7 @@ final class MemoryBurner {
 
         lock.lock()
         mb = chosenMB
-        state = chosenMB >= 512 ? "正常" : "降级"
+        state = chosenMB >= 1024 ? "正常" : "降级"
         lock.unlock()
 
         var firstRound = true
@@ -148,7 +148,7 @@ final class MemoryBurner {
             gbps = throughput
             checksum += total
             if firstRound {
-                state = chosenMB >= 512 ? "正常" : "降级(\(chosenMB)MB)"
+                state = chosenMB >= 1024 ? "正常" : "降级(\(chosenMB)MB)"
                 firstRound = false
             }
             lock.unlock()

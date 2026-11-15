@@ -19,7 +19,6 @@ final class BurnerEngine: ObservableObject {
     let renderer = MetalRenderer()
     private let cpu = CPUBurner()
     private let memory = MemoryBurner()
-    private let power = PowerMeter()
 
     private var timer: Timer?
     private var memoryObserver: NSObjectProtocol?
@@ -64,7 +63,6 @@ final class BurnerEngine: ObservableObject {
         UIApplication.shared.isIdleTimerDisabled = true   // 核心：原生防锁屏
         boostBrightness()
 
-        power.reset()                                     // 功耗统计从 0 开始攒窗口
         lastSlowAt = 0                                    // 下一帧立刻做一次慢采样
         renderer.setPaused(false)
         cpu.start()
@@ -115,18 +113,16 @@ final class BurnerEngine: ObservableObject {
 
     // MARK: - 状态汇总
 
-    /// 慢采样缓存：CPU% / RSS / 功耗 / 热状态 / 电池 统一 2.5s 采一次
+    /// 慢采样缓存：CPU% / RSS / 热状态 / 电池 统一 2.5s 采一次
     /// （只用一个主定时器 + 一个节流门，避免多个定时器互相打架）。
     /// FPS、运行时长这类便宜数据仍然 0.5s 刷新。
     private struct SlowSample {
         var cpuPercent: Double = 0
         var rssMB: Int = 0
-        var powerText: String = "采样中…"
         var thermal: Int = 0
         var thermalText: String = "-"
         var battery: Int = -1
         var batteryText: String = "需真机"
-        var available: Bool = false
     }
 
     private var slow = SlowSample()
@@ -137,7 +133,7 @@ final class BurnerEngine: ObservableObject {
         let now = CACurrentMediaTime()
         if now - lastSlowAt >= 2.5 {
             lastSlowAt = now
-            slow = collectSlow(now: now)
+            slow = collectSlow()
         }
 
         let c = cpu.sample()
@@ -164,13 +160,12 @@ final class BurnerEngine: ObservableObject {
         s.thermalText = slow.thermalText
         s.battery = slow.battery
         s.batteryText = slow.batteryText
-        s.powerText = slow.powerText
         s.errors = BurnCounters.shared.errors
         s.restarts = BurnCounters.shared.restarts
         stats = s
     }
 
-    private func collectSlow(now: CFTimeInterval) -> SlowSample {
+    private func collectSlow() -> SlowSample {
         var r = SlowSample()
 
         // 整机 8 核平均占用（mach per-CPU tick 差值）
@@ -180,11 +175,8 @@ final class BurnerEngine: ObservableObject {
 
         let level = UIDevice.current.batteryLevel
         let state = UIDevice.current.batteryState
-        power.record(level: level, state: state, now: now)
-        r.powerText = power.text()
-        r.available = power.available
 
-        if power.available {
+        if level >= 0 {
             r.battery = Int((level * 100).rounded())
             r.batteryText = "\(r.battery)% \(BurnerEngine.batteryName(state))"
 
@@ -193,7 +185,7 @@ final class BurnerEngine: ObservableObject {
             r.thermalText = BurnerEngine.thermalNames[min(r.thermal, 4)]
                 + (ProcessInfo.processInfo.isLowPowerModeEnabled ? "·省电" : "")
         } else {
-            // 模拟器：batteryLevel 恒为 -1，三行都标「需真机」
+            // 模拟器：batteryLevel 恒为 -1，电池/热状态两行都标「需真机」
             r.battery = -1
             r.batteryText = "需真机"
             r.thermal = 0

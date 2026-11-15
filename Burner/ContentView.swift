@@ -89,7 +89,6 @@ struct ContentView: View {
 
                         VStack(alignment: .leading, spacing: 3) {
                             row("电池", engine.stats.batteryText)
-                            row("功耗", engine.stats.powerText)
                             row("热状态", "\(engine.stats.thermal) \(engine.stats.thermalText)")
                         }
                         .frame(width: 144, alignment: .leading)

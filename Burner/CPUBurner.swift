@@ -3,9 +3,9 @@
 //  Burner
 //
 //  8 线程 CPU 满载器。每个 worker 一条独立 Thread、独立工作集：
-//    ① 40×40 矩阵乘（64k 次乘加）
-//    ② 1600 个元素的 sin / cos / exp 超越函数
-//    ③ 2MB scratch 跨步扫描（每 4 个取 1 个，制造非连续访存）
+//    ① 64×64 矩阵乘（262k 次乘加）
+//    ② 4096 个元素的 sin / cos / exp 超越函数
+//    ③ 8MB scratch 跨步扫描（每 4 个取 1 个，制造非连续访存）
 //    ④ 结果衰减，防止数值发散
 //
 //  锁只在「每秒上报一次」和「停止检查」时用到，热循环里没有锁。
@@ -16,9 +16,9 @@ import QuartzCore
 
 final class CPUBurner {
 
-    private static let matrixN = 40
-    private static let cells = matrixN * matrixN      // 1600
-    private static let scratchCount = 262_144         // 2MB / 8B
+    private static let matrixN = 64
+    private static let cells = matrixN * matrixN      // 4096
+    private static let scratchCount = 1_048_576       // 8MB / 8B
 
     private let lock = NSLock()
     private var running = false
@@ -169,7 +169,7 @@ final class CPUBurner {
             while true {
                 if (iter & 63) == 0, !isActive(gen) { break }
 
-                // ① 40×40 矩阵乘
+                // ① 64×64 矩阵乘
                 var i = 0
                 while i < n {
                     let row = i * n
@@ -196,7 +196,7 @@ final class CPUBurner {
                     i += 1
                 }
 
-                // ③ 2MB scratch 跨步扫描
+                // ③ 8MB scratch 跨步扫描
                 sum = 0.0
                 i = 0
                 while i < scratchLen {

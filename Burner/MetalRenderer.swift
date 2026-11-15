@@ -3,8 +3,8 @@
 //  Burner
 //
 //  全屏 Metal 重负载渲染器：
-//    · 每帧 1–3 个全屏 pass（自适应），每个 pass 都跑一遍
-//      6 octaves fbm × 5 光源 × 3 子光源 ≈ 每像素 90 次噪声求值
+//    · 每帧固定 4 个全屏 pass（不降档、不自适应），每个 pass 都跑一遍
+//      8 octaves fbm × 5 光源 × 3 子光源 ≈ 每像素 120 次噪声求值
 //    · pass 之间用两张 offscreen 纹理 ping-pong，读上一帧结果做反馈
 //    · 输出接近纯白（LCD 背光全开），只有极淡的噪声纹理在动
 //
@@ -36,7 +36,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     weak var view: MTKView?
 
     private(set) var fps: Double = 0
-    private(set) var passCount: Int = 3
+    private(set) var passCount: Int = 4
     private(set) var gpuState: String = "待机"
     /// iOS 没有公开的 GPU 利用率 API，这里用「帧率是否被算力压住」做定性判断：
     /// 帧率持续低于 15fps 说明 GPU 已经跑满 → 饱和；否则 → 活跃。
@@ -145,7 +145,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         guard offscreen.count == 2 else { return }
 
         let t = Float(fmod(now - startTime, 1000.0))
-        let passes = max(1, min(3, passCount))
+        let passes = max(1, min(4, passCount))
 
         for p in 0..<passes {
             let isLast = (p == passes - 1)
@@ -180,7 +180,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         commandBuffer.present(drawable)
         commandBuffer.commit()
 
-        // FPS 统计 + 自适应 pass 数
+        // FPS 统计（pass 数固定 4，不做自适应降档）
         frameCount += 1
         if windowStart == 0 { windowStart = now }
         let elapsed = now - windowStart
@@ -190,22 +190,10 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             windowStart = now
             // GPU 定性：帧率被算力压住 = 饱和
             loadLabel = fps < 15.0 ? "饱和" : "活跃"
-            adaptPasses()
         }
     }
 
     // MARK: - 内部
-
-    /// 帧率太低（<2fps，已经看不清在动）就减一档；富余（>45fps）就加回来。
-    /// 目标始终是 3 pass 满载，这个只是防止设备被彻底拖死的安全阀。
-    private func adaptPasses() {
-        if fps < 2.0 && passCount > 1 {
-            passCount -= 1
-            BurnCounters.shared.bumpRestart()
-        } else if fps > 45.0 && passCount < 3 {
-            passCount += 1
-        }
-    }
 
     private func rebuildTextures(size: CGSize) {
         guard pipeline != nil, let device = device else { return }
