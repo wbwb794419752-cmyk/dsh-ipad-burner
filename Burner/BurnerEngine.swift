@@ -19,6 +19,7 @@ final class BurnerEngine: ObservableObject {
     let renderer = MetalRenderer()
     private let cpu = CPUBurner()
     private let memory = MemoryBurner()
+    private let ane = ANEBurner()
 
     private var timer: Timer?
     private var memoryObserver: NSObjectProtocol?
@@ -67,6 +68,7 @@ final class BurnerEngine: ObservableObject {
         renderer.setPaused(false)
         cpu.start()
         memory.start()
+        ane.start()
         startTimer()
         refresh()
     }
@@ -78,6 +80,7 @@ final class BurnerEngine: ObservableObject {
 
         cpu.stop()
         memory.stop()
+        ane.stop()
         renderer.setPaused(true)
         stopTimer()
         restoreBrightness()
@@ -98,6 +101,7 @@ final class BurnerEngine: ObservableObject {
         renderer.setPaused(false)
         cpu.start()
         memory.start()
+        ane.start()
         refresh()
     }
 
@@ -107,6 +111,7 @@ final class BurnerEngine: ObservableObject {
         suspended = true
         cpu.stop()
         memory.stop()
+        ane.stop()
         renderer.setPaused(true)
         refresh()
     }
@@ -156,6 +161,9 @@ final class BurnerEngine: ObservableObject {
         s.memGBps = m.gbps
         s.memState = m.state
         s.memWarnings = m.warnings
+        let a = ane.snapshot()
+        s.aneState = a.state
+        s.aneRate = a.rate
         s.thermal = slow.thermal
         s.thermalText = slow.thermalText
         s.battery = slow.battery

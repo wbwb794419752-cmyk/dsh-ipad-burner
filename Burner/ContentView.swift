@@ -8,6 +8,7 @@
 
 import SwiftUI
 import MetalKit
+import QuartzCore
 import Foundation
 
 struct ContentView: View {
@@ -84,6 +85,7 @@ struct ContentView: View {
                             row("CPU%", String(format: "%.0f%%", engine.stats.cpuPercent))
                             row("内存", memText)
                             row("RSS", "\(engine.stats.rssMB)MB")
+                            row("ANE", aneText)
                         }
                         .frame(width: 208, alignment: .leading)
 
@@ -170,6 +172,15 @@ struct ContentView: View {
         return s.memState
     }
 
+    /// ANE 行：运行中 / 停止 + 每秒推理次数
+    private var aneText: String {
+        let s = engine.stats
+        if s.aneState == "运行中" {
+            return "运行中 · \(rateText(s.aneRate))/s"
+        }
+        return s.aneState
+    }
+
     private func rateText(_ v: Double) -> String {
         if v >= 1000 {
             return String(format: "%.1fk", v / 1000.0)
@@ -200,7 +211,11 @@ struct MetalView: UIViewRepresentable {
         v.isOpaque = true
         v.backgroundColor = .white
         v.clearColor = MTLClearColorMake(1.0, 1.0, 1.0, 1.0)
-        v.preferredFramesPerSecond = 120        // iPad Pro 11 M1 是 ProMotion 120Hz
+        // 3 个 drawable + 3 个 in-flight command buffer：GPU 队列里永远有活干。
+        // maximumDrawableCount 在 CAMetalLayer 上（iOS 只允许 2 或 3），必须在出第一帧前设。
+        if let metalLayer = v.layer as? CAMetalLayer {
+            metalLayer.maximumDrawableCount = MetalRenderer.inFlightCount
+        }
         v.isPaused = false
         v.enableSetNeedsDisplay = false
         v.autoResizeDrawable = true

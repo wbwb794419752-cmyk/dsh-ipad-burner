@@ -25,6 +25,8 @@ struct BurnStats {
     var memGBps: Double = 0
     var memState: String = "待机"
     var memWarnings: Int = 0
+    var aneState: String = "停止"     // ANE：停止 / 加载中 / 运行中 / 模型加载失败
+    var aneRate: Double = 0          // ANE 每秒推理次数
     var thermal: Int = 0             // 0-4（iOS 目前只上报 0-3，4=危急 为预留档）
     var thermalText: String = "-"
     var battery: Int = -1            // 0-100，-1 表示未知（模拟器恒为 -1）

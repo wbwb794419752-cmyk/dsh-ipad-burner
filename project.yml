@@ -34,6 +34,9 @@ targets:
     deploymentTarget: "17.0"
 
     # 源码目录：Swift + Metal + Assets 全部在 Burner/ 下
+    # 注意：Burner/Resources/ane_burner.mlmodel 是构建期由 generate_ane_model.py 生成的
+    #（.gitignore 里排除了 *.mlmodel），GHA 里必须先跑生成脚本再 xcodegen，
+    # 否则这个资源不会被扫进工程。
     sources:
       - path: Burner
 
@@ -97,6 +100,7 @@ targets:
       - sdk: Metal.framework
       - sdk: MetalKit.framework
       - sdk: QuartzCore.framework
+      - sdk: CoreML.framework
 
 # 显式声明 scheme，保证 `xcodebuild -scheme Burner` 一定能找到
 schemes:

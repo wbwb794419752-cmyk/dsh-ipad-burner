@@ -13,9 +13,10 @@
 
 | 负载 | 实现 | 强度 |
 |---|---|---|
-| **GPU** | 全屏 `MTKView`，重型片元着色器：8 octaves fbm × 5 光源 × 3 子光源 ≈ **每像素 120 次噪声求值**；每帧 **固定 4 个全屏 pass**（两张 offscreen 纹理 ping-pong，读上一 pass 做反馈） | 原生分辨率（2388×1668 @2x ≈ 400 万像素）× 固定 4 pass |
+| **GPU** | 全屏 `MTKView`，重型片元着色器：8 octaves fbm × 5 光源 × 3 子光源 ≈ **每像素 120 次噪声求值**；每帧 **固定 4 个全屏 pass**（两张 offscreen 纹理 ping-pong，读上一 pass 做反馈）；**3 个 in-flight command buffer**（`DispatchSemaphore(value: 3)` + `maximumDrawableCount = 3`）让 GPU 队列里永远有活干 | 原生分辨率（2388×1668 @2x ≈ 400 万像素）× 固定 4 pass × 3 帧流水 |
 | **CPU** | **8 条独立 `Thread`**（`activeProcessorCount`，M1 正好 8 核全占），每条线程独立工作集：64×64 矩阵乘（262k 次乘加）+ 4096 个元素 `sin/cos/exp` + 8MB scratch 跨步扫描 + 结果衰减 | 热循环里无锁、无 ARC、无数组边界检查（全 `UnsafeMutablePointer`） |
 | **内存带宽** | `malloc` **1024MB**，逐页触碰落成常驻，然后无限次全量「读→改→写」；失败自动降级 512 / 256MB | 单线程连续扫，实测会把内存控制器压到接近饱和 |
+| **ANE** | `MLModel`（`computeUnits = .cpuAndNeuralEngine`）加载一个 **1×1 卷积、batch 512** 的 Core ML 模型（`[1,64,512,1] → [1,64,512,1]`，等价 512×64×64 的 GEMM，但走 ANE 的原生卷积通路），后台线程死循环 `predict()` | ANE 是**独立供电轨**，和 CPU/GPU 并行取电、不抢执行单元（约 +1.5–4W） |
 | **屏幕** | 输出接近纯白（`1.0 - 0~6%` 灰度扰动），LCD 背光全开；运行期间把系统亮度强制拉到 100%，停止时恢复原值 | 背光 + GPU 双重发热 |
 | **防锁屏** | `UIApplication.shared.isIdleTimerDisabled = true`（进程级原生 API，AppDelegate 启动时设、回前台再设一次） | 不依赖系统设置，不依赖 Wake Lock |
 | **静默** | 完全不创建 `AVAudioSession`、不播任何声音 | — |
@@ -45,11 +46,14 @@ native-burner/                     ← 仓库根目录（推到 GitHub 的就是
 │  ├─ MetalRenderer.swift          ← MTKViewDelegate：pipeline、ping-pong 纹理、固定 4 pass、FPS 统计
 │  ├─ shaders.metal                ← MSL：全屏三角形 + 重负载片元着色器
 │  ├─ CPUBurner.swift              ← 8 线程矩阵乘 / 超越函数 / 8MB 扫描
+│  ├─ ANEBurner.swift              ← Core ML 常驻推理：ANE 1×1 卷积死循环 predict()
 │  ├─ MemoryBurner.swift           ← 1024MB 全量读写扫描（带降级阶梯）
 │  ├─ SystemMetrics.swift          ← 整机 CPU%（mach per-CPU tick）+ 本进程 RSS（task_info）
 │  ├─ BurnStats.swift              ← 面板数据模型 + 全局异常计数
 │  └─ Assets.xcassets/             ← AppIcon（1024 单尺寸）
-├─ .github/workflows/build.yml     ← GHA：xcodegen → xcodebuild archive → 打包未签名 IPA
+├─ generate_ane_model.py           ← 构建期生成 ANE 用的 .mlmodel（不进 git）
+├─ Burner/Resources/               ← 构建期产物目录（ane_burner.mlmodel，gitignore）
+├─ .github/workflows/build.yml     ← GHA：生成模型 → xcodegen → xcodebuild archive → 打包 IPA
 └─ README.md
 ```
 
@@ -150,6 +154,30 @@ Metal / iOS **没有公开 API** 能读 GPU 利用率（`MTLDevice` 只暴露 `r
 
 只有**一个** 0.5s 主定时器（刷新运行时长、FPS、CPU 线程心跳），
 CPU% / RSS / 热状态 / 电池 统一走同一个 **2.5s 慢采样门**，不额外起定时器。
+
+### 5.3 ANE（神经引擎）那条负载
+
+M1 的 16 核 Neural Engine 是整机唯一**完全没用上**的大块算力，而且是**独立供电轨**：
+它和 CPU/GPU 并行取电，不抢执行单元（只共享内存带宽），所以在 CPU/GPU 已经撞功耗墙时，
+ANE 的功率基本是净增量（第三方实测：M1 上持续卷积约 1.78W，4096 GEMM 峰值 4.4W）。
+
+要点：
+
+- **只有 Core ML 能到 ANE**，没有别的入口。
+- **ANE 的原生指令是 2D 卷积，没有独立 GEMM 单元**，所以「喂满 ANE」的形状是大 batch 的
+  1×1 卷积：`[1, 64, 512, 1] → [1, 64, 512, 1]`（等价 (512×64)×(64×64) 的 GEMM）。
+- **`computeUnits = .cpuAndNeuralEngine`**，不要用 `.all`：`.all` 会把算子分给 GPU，
+  和 Metal 那条满载流水线抢同一份预算；`.cpuAndNeuralEngine` 明确排除 GPU。
+- **模型不进 git**：`generate_ane_model.py` 在 GHA 里用 coremltools 现场生成
+  `Burner/Resources/ane_burner.mlmodel`，xcodegen 之后才扫得到它，Xcode 再自动编译成
+  `ane_burner.mlmodelc` 打进 bundle。仓库里只提交脚本。
+- **CI 里验证 ANE 路由**：生成脚本带 `--verify`，在 macOS runner 上编译模型后用
+  `MLComputePlan` 逐层打印 `preferred compute device`，日志里出现
+  `ANE 路由: N/N 层 preferred = NeuralEngine` 才算真的落在 ANE 上。
+  脚本会按 `[1,64,512,1] → [1,64,32,16] → [1,64,64,8] → [1,64,128,4]` 依次试，
+  哪个形状能整层落到 ANE 就用哪个（App 端从模型描述里读实际形状，不写死）。
+- **看门狗**：`ANEBurner` 的工作线程每次推理都包在 `try/catch` 里，另一个看门狗线程每 2s
+  查心跳，超过 3s 没心跳就换一代线程（模型对象复用）。
 
 ---
 

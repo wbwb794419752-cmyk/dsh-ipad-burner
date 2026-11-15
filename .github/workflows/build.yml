@@ -25,13 +25,35 @@ jobs:
           xcodegen --version
 
       - name: Show Xcode version
-        run: xcodebuild -version
+        run: |
+          xcodebuild -version
+          uname -m
+          sysctl -n machdep.cpu.brand_string || true
+
+      # ANE 模型必须在 xcodegen 之前生成：xcodegen 扫描 Burner/ 目录时才看得到
+      # Burner/Resources/ane_burner.mlmodel，并把它作为资源加进工程。
+      # 模型本身不进 git（.gitignore 里排除了 *.mlmodel）。
+      - name: Generate ANE Core ML model
+        run: |
+          set -euo pipefail
+          python3 -m venv .venv-coreml
+          .venv-coreml/bin/python -m pip install --upgrade pip
+          .venv-coreml/bin/python -m pip install "coremltools>=8,<10" numpy
+          .venv-coreml/bin/python -c "import coremltools; print('coremltools', coremltools.__version__)"
+          mkdir -p Burner/Resources
+          # --verify：在 macOS runner 上编译模型并用 MLComputePlan 打印每层落在哪个计算单元，
+          # 用来确认算子真的路由到 Neural Engine（日志里看 "ANE 路由" 那几行）。
+          .venv-coreml/bin/python generate_ane_model.py \
+            --out Burner/Resources/ane_burner.mlmodel --verify
+          ls -la Burner/Resources/
 
       - name: Generate Xcode project
         run: |
           xcodegen generate
           ls -la
           ls -la Burner.xcodeproj
+          # 确认 .mlmodel 被写进了工程文件（Resource 阶段）
+          grep -c "ane_burner.mlmodel" Burner.xcodeproj/project.pbxproj || true
 
       - name: Archive (unsigned)
         run: |
@@ -63,6 +85,10 @@ jobs:
           # 未签名包不需要（也不该有）签名残留
           rm -rf Payload/Burner.app/_CodeSignature
           rm -rf Payload/Burner.app/embedded.mobileprovision
+
+          # ANE 模型必须真的编译进了 bundle（.mlmodel → .mlmodelc）
+          echo "--- Core ML 资源 ---"
+          ls -la Payload/Burner.app | grep -i "mlmodel" || echo "警告: bundle 里没有 ane_burner.mlmodelc"
 
           zip -qry Burner-unsigned.ipa Payload
           echo "--- 产物 ---"

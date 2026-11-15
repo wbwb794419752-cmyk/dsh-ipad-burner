@@ -11,6 +11,11 @@
 //  像素格式统一 bgra8Unorm，所以同一条 pipeline 既能渲染到 offscreen
 //  纹理，也能直接渲染到 MTKView 的 drawable。
 //
+//  GPU 流水线深度：3 个 in-flight command buffer。
+//  同步 draw()（commit 完就等下一帧）会让 GPU 在「帧结束→下一帧 begin」之间空转；
+//  用 DispatchSemaphore(value: 3) 允许最多 3 个 command buffer 同时在 GPU 上排队，
+//  配合 MTKView.maximumDrawableCount = 3，GPU 队列里永远有活干，帧间空隙被填满。
+//
 
 import Foundation
 import Metal
@@ -34,6 +39,10 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
 
     /// MTKView 由 SwiftUI 创建，这里弱引用一份用于暂停/恢复
     weak var view: MTKView?
+
+    /// 3 个 in-flight command buffer：允许 GPU 队列里同时排 3 帧，消灭帧间空闲
+    private let inFlightSemaphore = DispatchSemaphore(value: MetalRenderer.inFlightCount)
+    static let inFlightCount = 3
 
     private(set) var fps: Double = 0
     private(set) var passCount: Int = 4
@@ -136,13 +145,19 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
               let sampler = sampler,
               let queue = queue,
               let dummy = dummy,
-              let drawable = view.currentDrawable,
-              let commandBuffer = queue.makeCommandBuffer() else {
+              let drawable = view.currentDrawable else {
             return
         }
 
         rebuildTextures(size: view.drawableSize)
         guard offscreen.count == 2 else { return }
+
+        // 拿一个 in-flight 槽位：前 3 帧不阻塞，第 4 帧起等最早那帧完成再提交
+        inFlightSemaphore.wait()
+        guard let commandBuffer = queue.makeCommandBuffer() else {
+            inFlightSemaphore.signal()
+            return
+        }
 
         let t = Float(fmod(now - startTime, 1000.0))
         let passes = max(1, min(4, passCount))
@@ -177,6 +192,9 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             enc.endEncoding()
         }
 
+        // 完成回调里直接捕获信号量，避免闭包持有 self
+        let sem = inFlightSemaphore
+        commandBuffer.addCompletedHandler { _ in sem.signal() }
         commandBuffer.present(drawable)
         commandBuffer.commit()
 

@@ -10,6 +10,11 @@ Payload/
 *.ipa.*
 *.xcarchive
 
+# Core ML 模型（GHA 构建时由 generate_ane_model.py 生成，不进 git）
+*.mlmodel
+*.mlpackage
+*.mlmodelc
+
 # macOS
 .DS_Store
 
